@@ -133,3 +133,14 @@ class OverlapReviewRecord(Base):
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     issue_group_id: Mapped[str | None] = mapped_column(ForeignKey("issue_groups.id"), nullable=True, index=True)
     reviewed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+class AccessRequest(Base):
+    __tablename__ = "access_requests"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(200))
+    email: Mapped[str] = mapped_column(String(250), index=True)
+    requested_role: Mapped[str] = mapped_column(String(50))
+    organization: Mapped[str] = mapped_column(String(250))
+    justification: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), default="Pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

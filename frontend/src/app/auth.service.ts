@@ -2,7 +2,15 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, tap } from 'rxjs';
 import { getApiBaseUrl } from './oneview-api.service';
-export interface AuthUser { id: string; username: string; full_name?: string; role: string; }
+export interface AuthUser { 
+  id: string; 
+  username: string; 
+  full_name?: string; 
+  role: string;
+  email?: string;
+  institution_id?: string;
+  assigned_bureau?: string;
+}
 export interface LoginResponse { access_token: string; token_type: string; expires_in: number; portal?: string; portal_title?: string; user: AuthUser; }
 const TOKEN_KEY = 'aicte_oneview_access_token';
 const USER_KEY = 'aicte_oneview_user';

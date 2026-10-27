@@ -122,3 +122,79 @@ class PortalOut(BaseModel):
     allowed_roles: list[str]
     endpoint: str
 
+class UserOut(ORMModel):
+    id: str
+    username: str
+    full_name: str
+    role: str
+    active: bool
+    created_at: datetime
+
+class UserUpdate(BaseModel):
+    full_name: str | None = None
+    role: str | None = None
+    active: bool | None = None
+
+class AccessRequestCreate(BaseModel):
+    full_name: str
+    email: str
+    requested_role: str
+    organization: str
+    justification: str
+
+class AccessRequestReview(BaseModel):
+    status: str  # Approved, Rejected
+
+class AccessRequestOut(ORMModel):
+    id: str
+    full_name: str
+    email: str
+    requested_role: str
+    organization: str
+    justification: str
+    status: str
+    created_at: datetime
+
+class MonthlyTrendItem(BaseModel):
+    month: str
+    year: int
+    received: int
+    disposed: int
+
+class CategoryTrendItem(BaseModel):
+    category: str
+    count: int
+
+class CaseAgeItem(BaseModel):
+    range: str
+    count: int
+
+class OfficerDashboardSummary(BaseModel):
+    my_assigned_cases: int
+    awaiting_action: int
+    under_review: int
+    overdue_cases: int
+    due_soon: int
+    resolved_cases: int
+    bureau: str | None = None
+    officer_name: str | None = None
+
+class InstitutionDashboardSummary(BaseModel):
+    institution_id: str
+    institution_name: str
+    total_complaints: int
+    under_review: int
+    awaiting_info: int
+    resolved: int
+    active_cases: int
+
+class AdminSystemSummary(BaseModel):
+    total_users: int
+    active_users: int
+    registered_institutions: int
+    registered_officers: int
+    pending_access_requests: int
+    recent_security_events: int
+    application_health: str
+    database_status: str
+
