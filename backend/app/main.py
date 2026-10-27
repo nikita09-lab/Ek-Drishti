@@ -50,8 +50,13 @@ app.add_middleware(
 async def security_and_audit_middleware(request: Request, call_next):
     path = request.url.path
     user = None
-    # Fail closed for API access in every environment. Only health and login are public.
-    if path.startswith("/api/") and path not in ("/api/health", "/api/auth/login"):
+    # Fail closed for API access in every environment. Health, portal metadata, and login endpoints are public.
+    is_public = (
+        path == "/api/health"
+        or path == "/api/auth/portals"
+        or path.startswith("/api/auth/login")
+    )
+    if path.startswith("/api/") and not is_public:
         from starlette.responses import JSONResponse
         auth = request.headers.get("authorization", "")
         if not auth.lower().startswith("bearer "):
@@ -82,7 +87,7 @@ async def security_and_audit_middleware(request: Request, call_next):
     # Audit writes and auth events. Never record passwords, request bodies, or bearer tokens.
     if path.startswith("/api/") and (
         request.method.upper() in {"POST","PUT","PATCH","DELETE"}
-        or (path == "/api/auth/login" and response.status_code != 200)
+        or (path.startswith("/api/auth/login") and response.status_code != 200)
     ):
         try:
             from app.database import SessionLocal
@@ -99,25 +104,181 @@ async def security_and_audit_middleware(request: Request, call_next):
 
 @app.get("/")
 def root():
-    return {"name": "AICTE OneView API", "docs": "/docs", "health": "/api/health"}
+    return {
+        "name": "AICTE OneView API",
+        "docs": "/docs",
+        "health": "/api/health",
+        "portals": "/api/auth/portals",
+    }
 
 @app.get("/api/health")
 def health():
     return {"status": "ok", "timestamp": datetime.now().astimezone().isoformat()}
 
-@app.post("/api/auth/login")
-def login(payload: dict, db: Session = Depends(get_db)):
-    username = str(payload.get("username", "")).strip()
-    password = str(payload.get("password", ""))
+# Portal Role Configurations & Metadata
+PORTAL_CONFIG = {
+    "aicte_official": {
+        "title": "AICTE Officials (Administration)",
+        "badge": "Administration",
+        "description": "Official access for AICTE leadership, directors, and bureau heads to monitor nationwide cases and escalations.",
+        "allowed_roles": ["admin", "bureau_head"],
+        "endpoint": "/api/auth/login/aicte-official",
+    },
+    "bureau_officer": {
+        "title": "Bureau Officers",
+        "badge": "RB & PGRC Officers",
+        "description": "Operational portal for assigned Regulation Bureau (RB) and PGRC officers managing complaints.",
+        "allowed_roles": ["officer", "case_manager", "bureau_head", "admin"],
+        "endpoint": "/api/auth/login/bureau-officer",
+    },
+    "system_admin": {
+        "title": "System Admin",
+        "badge": "IT & Security",
+        "description": "Administrative access for technical administrators managing database configurations, audit logs, and security.",
+        "allowed_roles": ["admin"],
+        "endpoint": "/api/auth/login/system-admin",
+    },
+    "institution": {
+        "title": "Institution",
+        "badge": "Colleges & Universities",
+        "description": "Institutional portal for technical colleges, polytechnics, and universities to track cases and compliance.",
+        "allowed_roles": ["institution", "viewer", "admin"],
+        "endpoint": "/api/auth/login/institution",
+    },
+}
+
+PORTAL_ALIASES = {
+    "official": "aicte_official",
+    "officials": "aicte_official",
+    "administration": "aicte_official",
+    "aicte": "aicte_official",
+    "aicte-official": "aicte_official",
+    "aicte_official": "aicte_official",
+    "officer": "bureau_officer",
+    "officers": "bureau_officer",
+    "bureau": "bureau_officer",
+    "bureau-officer": "bureau_officer",
+    "bureau_officer": "bureau_officer",
+    "admin": "system_admin",
+    "system-admin": "system_admin",
+    "system_admin": "system_admin",
+    "institution": "institution",
+    "institutions": "institution",
+    "college": "institution",
+}
+
+def perform_login(username: str, password: str, requested_portal: str | None, db: Session, resource_path: str):
+    username = str(username or "").strip()
+    password = str(password or "")
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password are required")
+
     user = db.scalar(select(models.AuthUser).where(models.AuthUser.username == username))
     if not user or not user.active or not verify_password(password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    resolved_portal = None
+    if requested_portal:
+        raw_key = requested_portal.lower().strip()
+        portal_key = PORTAL_ALIASES.get(raw_key, raw_key)
+        if portal_key not in PORTAL_CONFIG:
+            valid_keys = ", ".join(PORTAL_CONFIG.keys())
+            raise HTTPException(status_code=400, detail=f"Invalid portal '{requested_portal}'. Available options: {valid_keys}")
+
+        portal_def = PORTAL_CONFIG[portal_key]
+        if user.role not in portal_def["allowed_roles"] and user.role != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied: Account '{user.username}' (role '{user.role}') is not authorized for '{portal_def['title']}'. Please use your designated portal."
+            )
+        resolved_portal = portal_key
+    else:
+        if user.role == "admin":
+            resolved_portal = "system_admin"
+        elif user.role == "bureau_head":
+            resolved_portal = "aicte_official"
+        elif user.role in ("officer", "case_manager"):
+            resolved_portal = "bureau_officer"
+        elif user.role == "institution":
+            resolved_portal = "institution"
+        else:
+            resolved_portal = "aicte_official"
+
+    portal_info = PORTAL_CONFIG.get(resolved_portal, {})
     token = create_access_token(user.id, user.username, user.role)
-    db.add(models.AuditLog(id=new_id("AUD"), actor_user_id=user.id, actor_username=user.username,
-        action="LOGIN", resource="/api/auth/login", status_code=200, ip_address=None))
+    db.add(models.AuditLog(
+        id=new_id("AUD"),
+        actor_user_id=user.id,
+        actor_username=user.username,
+        action="LOGIN",
+        resource=f"{resource_path}?portal={resolved_portal}",
+        status_code=200,
+        ip_address=None
+    ))
     db.commit()
-    return {"access_token": token, "token_type": "bearer", "expires_in": settings.access_token_minutes*60,
-            "user": {"id":user.id, "username":user.username, "full_name":user.full_name, "role":user.role}}
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in": settings.access_token_minutes * 60,
+        "portal": resolved_portal,
+        "portal_title": portal_info.get("title", resolved_portal),
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "full_name": user.full_name,
+            "role": user.role,
+        }
+    }
+
+@app.get("/api/auth/portals", response_model=list[schemas.PortalOut])
+def get_auth_portals():
+    """Discover available login portals and their authorization requirements."""
+    return [
+        schemas.PortalOut(
+            id=k,
+            title=v["title"],
+            badge=v["badge"],
+            description=v["description"],
+            allowed_roles=v["allowed_roles"],
+            endpoint=v["endpoint"]
+        )
+        for k, v in PORTAL_CONFIG.items()
+    ]
+
+@app.post("/api/auth/login", response_model=schemas.LoginResponse)
+def login(payload: schemas.LoginRequest, portal: str | None = None, db: Session = Depends(get_db)):
+    """Universal login endpoint supporting optional portal validation."""
+    target_portal = payload.portal or portal
+    return perform_login(payload.username, payload.password, target_portal, db, "/api/auth/login")
+
+# Dedicated Endpoint 1: AICTE Officials (Administration)
+@app.post("/api/auth/login/aicte-official", response_model=schemas.LoginResponse)
+@app.post("/api/auth/login/official", response_model=schemas.LoginResponse)
+def login_aicte_official(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
+    """Dedicated login for AICTE Officials (Administration)."""
+    return perform_login(payload.username, payload.password, "aicte_official", db, "/api/auth/login/aicte-official")
+
+# Dedicated Endpoint 2: Bureau Officers
+@app.post("/api/auth/login/bureau-officer", response_model=schemas.LoginResponse)
+@app.post("/api/auth/login/officer", response_model=schemas.LoginResponse)
+def login_bureau_officer(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
+    """Dedicated login for Bureau Officers (Regulation Bureau & PGRC)."""
+    return perform_login(payload.username, payload.password, "bureau_officer", db, "/api/auth/login/bureau-officer")
+
+# Dedicated Endpoint 3: System Admin
+@app.post("/api/auth/login/system-admin", response_model=schemas.LoginResponse)
+@app.post("/api/auth/login/admin", response_model=schemas.LoginResponse)
+def login_system_admin(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
+    """Dedicated login for System Administrators."""
+    return perform_login(payload.username, payload.password, "system_admin", db, "/api/auth/login/system-admin")
+
+# Dedicated Endpoint 4: Institution
+@app.post("/api/auth/login/institution", response_model=schemas.LoginResponse)
+def login_institution(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
+    """Dedicated login for Approved Institutions (Colleges & Universities)."""
+    return perform_login(payload.username, payload.password, "institution", db, "/api/auth/login/institution")
+
 
 @app.get("/api/auth/me")
 def auth_me(request: Request):

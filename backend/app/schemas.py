@@ -94,3 +94,31 @@ class OverlapReview(BaseModel):
     related_complaint_id: str
     decision: str
     remarks: str | None = Field(default=None, max_length=4000)
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+    portal: str | None = None
+
+class AuthUserInfo(BaseModel):
+    id: str
+    username: str
+    full_name: str
+    role: str
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    portal: str
+    portal_title: str
+    user: AuthUserInfo
+
+class PortalOut(BaseModel):
+    id: str
+    title: str
+    badge: str
+    description: str
+    allowed_roles: list[str]
+    endpoint: str
+

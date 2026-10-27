@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, ChangeDetectorRef, NgZone } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { forkJoin } from 'rxjs';
@@ -24,7 +24,13 @@ export interface LoginPortal {
 
 @Component({ selector: 'app-root', standalone: true, imports: [CommonModule, FormsModule], templateUrl: './app.html', styleUrl: './app.scss' })
 export class App implements OnInit {
-  constructor(private api: OneViewApiService, public auth: AuthService) {}
+  constructor(
+    private api: OneViewApiService,
+    public auth: AuthService,
+    private cdr: ChangeDetectorRef,
+    private ngZone: NgZone
+  ) {}
+
 
   readonly loginPortals: LoginPortal[] = [
     {
@@ -97,6 +103,7 @@ export class App implements OnInit {
     const p = this.currentPortal;
     this.loginUsername = p.demoUsername;
     this.loginPassword = p.demoPassword;
+    this.cdr.detectChanges();
   }
 
   fillDemo(portal: LoginPortal): void {
@@ -104,6 +111,7 @@ export class App implements OnInit {
     this.loginUsername = portal.demoUsername;
     this.loginPassword = portal.demoPassword;
     this.loginError = '';
+    this.cdr.detectChanges();
   }
 
   loginUsername = 'aicte.official';
@@ -113,33 +121,55 @@ export class App implements OnInit {
   get userDisplayName(): string { return this.auth.user?.full_name || this.auth.user?.username || 'Authorized user'; }
   get roleLabel(): string { return (this.auth.user?.role || 'viewer').replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase()); }
   get initials(): string { return this.userDisplayName.split(/\s+/).filter(Boolean).slice(0,2).map(x => x[0].toUpperCase()).join('') || 'U'; }
+
   submitLogin(): void {
     this.loginError = '';
-    if (!this.loginUsername.trim() || !this.loginPassword) { this.loginError = 'Enter your username and password.'; return; }
+    if (!this.loginUsername.trim() || !this.loginPassword) {
+      this.loginError = 'Enter your username and password.';
+      this.cdr.detectChanges();
+      return;
+    }
     this.loginBusy = true;
-    this.auth.login(this.loginUsername.trim(), this.loginPassword).subscribe({
+    this.cdr.detectChanges();
+
+    this.auth.login(this.loginUsername.trim(), this.loginPassword, this.selectedPortalId).subscribe({
       next: (res) => {
-        const userRole = res.user?.role;
-        const portal = this.currentPortal;
-        if (userRole !== 'admin' && !portal.allowedRoles.includes(userRole)) {
-          this.auth.logout();
+        this.ngZone.run(() => {
+          const userRole = res.user?.role;
+          this.loginPassword = '';
           this.loginBusy = false;
-          this.loginError = `This account has role "${userRole}". Please select the appropriate portal to sign in.`;
-          return;
-        }
-        this.loginPassword = '';
-        this.loginBusy = false;
-        if (userRole === 'institution') {
-          this.activePage = 'Institutions';
-        } else {
-          this.activePage = 'Command Center';
-        }
-        this.refreshData();
+          this.loginError = '';
+          if (userRole === 'institution') {
+            this.activePage = 'Institutions';
+          } else {
+            this.activePage = 'Command Center';
+          }
+          this.cdr.detectChanges();
+          this.refreshData();
+        });
       },
-      error: err => { this.loginBusy = false; this.loginError = err?.error?.detail || 'Sign-in failed. Check your credentials and API connection.'; }
+      error: err => {
+        this.ngZone.run(() => {
+          this.loginBusy = false;
+          this.loginError = err?.error?.detail || 'Sign-in failed. Check your credentials and API connection.';
+          this.cdr.detectChanges();
+        });
+      }
     });
   }
-  logout(): void { this.auth.logout(); this.loginPassword = ''; this.loginError = ''; this.apiConnected = false; this.cases = []; this.complaints = []; this.institutions = []; this.officers = []; this.activePage = 'Command Center'; }
+
+  logout(): void {
+    this.auth.logout();
+    this.loginPassword = '';
+    this.loginError = '';
+    this.apiConnected = false;
+    this.cases = [];
+    this.complaints = [];
+    this.institutions = [];
+    this.officers = [];
+    this.activePage = 'Command Center';
+    this.cdr.detectChanges();
+  }
   activePage = 'Command Center'; mobileNavOpen = false; searchTerm = ''; bureauFilter = 'All Bureaus'; statusFilter = 'All statuses'; notice = '';
   loading = true; apiConnected = false; loadError = '';
   summary: DashboardSummary = { total_complaints: 0, total_cases: 0, pending_cases: 0, disposed_cases: 0, overdue_cases: 0, institutions: 0, officers: 0 };
@@ -196,17 +226,33 @@ export class App implements OnInit {
     this.loading = true; this.loadError = '';
     forkJoin({ summary: this.api.dashboardSummary(), institutions: this.api.institutions(), officers: this.api.officers(), cases: this.api.cases() }).subscribe({
       next: data => {
-        this.summary = data.summary; this.institutions = data.institutions; this.officers = data.officers;
-        this.cases = data.cases.map(c => {
-          const institution = data.institutions.find(i => i.id === c.institution_id);
-          const officer = data.officers.find(o => o.id === c.officer_id);
-          return { id: c.id, institution: institution?.name ?? c.institution_id, category: c.title, bureau: c.bureau || 'Unassigned', officer: officer?.name ?? 'Unassigned', status: c.status, due: c.expected_disposal_date ? this.formatDate(c.expected_disposal_date) : 'Not set', priority: c.priority || 'Normal', age: this.daysOpen(c.opened_at) };
+        this.ngZone.run(() => {
+          this.summary = data.summary;
+          this.institutions = data.institutions;
+          this.officers = data.officers;
+          this.cases = data.cases.map(c => {
+            const institution = data.institutions.find(i => i.id === c.institution_id);
+            const officer = data.officers.find(o => o.id === c.officer_id);
+            return { id: c.id, institution: institution?.name ?? c.institution_id, category: c.title, bureau: c.bureau || 'Unassigned', officer: officer?.name ?? 'Unassigned', status: c.status, due: c.expected_disposal_date ? this.formatDate(c.expected_disposal_date) : 'Not set', priority: c.priority || 'Normal', age: this.daysOpen(c.opened_at) };
+          });
+          this.apiConnected = true;
+          this.loading = false;
+          this.cdr.detectChanges();
+          this.api.complaints().subscribe({
+            next: rows => { this.complaints = rows; this.cdr.detectChanges(); },
+            error: () => { this.complaints = []; this.cdr.detectChanges(); }
+          });
+          this.loadPageData();
         });
-        this.apiConnected = true; this.loading = false;
-        this.api.complaints().subscribe({ next: rows => this.complaints = rows, error: () => this.complaints = [] });
-        this.loadPageData();
       },
-      error: err => { this.apiConnected = false; this.loading = false; this.loadError = err?.status === 0 ? 'Cannot reach the API. Start the FastAPI backend at http://127.0.0.1:8000.' : 'Could not load records from the API. Check the backend terminal for details.'; }
+      error: err => {
+        this.ngZone.run(() => {
+          this.apiConnected = false;
+          this.loading = false;
+          this.loadError = err?.status === 0 ? 'Cannot reach the API. Start the FastAPI backend at http://127.0.0.1:8000.' : 'Could not load records from the API. Check the backend terminal for details.';
+          this.cdr.detectChanges();
+        });
+      }
     });
   }
   private formatDate(value: string): string { return new Date(`${value}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }); }
