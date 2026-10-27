@@ -124,13 +124,22 @@
   <button class="scrim" *ngIf="mobileNavOpen" aria-label="Close navigation" (click)="mobileNavOpen = false"></button>
   
   <!-- Sidebar -->
-  <aside class="sidebar" [class.open]="mobileNavOpen">
+  <aside class="sidebar" [class.open]="mobileNavOpen" [class.collapsed]="sidebarCollapsed">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">AICTE</div>
       <div class="brand-text">
         <strong class="brand-name">AICTE OneView</strong>
         <span class="brand-subtitle">Ek-Drishti Governance</span>
       </div>
+      <button 
+        type="button" 
+        class="sidebar-collapse-btn" 
+        (click)="toggleSidebar()" 
+        [title]="sidebarCollapsed ? 'Expand sidebar' : 'Minimize sidebar'"
+        [attr.aria-label]="sidebarCollapsed ? 'Expand sidebar' : 'Minimize sidebar'"
+      >
+        <span class="collapse-icon">{{ sidebarCollapsed ? '▶' : '◀' }}</span>
+      </button>
       <button class="close-nav" (click)="mobileNavOpen = false" aria-label="Close menu">×</button>
     </div>
 
@@ -162,6 +171,7 @@
         *ngFor="let item of navItems" 
         [class.active]="activePage === item.label" 
         (click)="navigate(item.label)"
+        [title]="item.label"
       >
         <span class="nav-glyph" aria-hidden="true">{{ item.glyph }}</span>
         <span>{{ item.label }}</span>
@@ -170,17 +180,17 @@
     </nav>
 
     <div class="user-panel">
-      <div class="avatar">{{ initials }}</div>
+      <div class="avatar" [title]="userDisplayName">{{ initials }}</div>
       <div>
         <strong>{{ userDisplayName }}</strong>
         <span>{{ roleLabel }}</span>
       </div>
-      <button class="text-button" (click)="logout()">Sign out</button>
+      <button class="text-button" (click)="logout()" title="Sign out">Sign out</button>
     </div>
   </aside>
 
   <!-- Main Shell -->
-  <div class="main-shell">
+  <div class="main-shell" [class.collapsed]="sidebarCollapsed">
     <div class="gov-tricolor-ribbon"></div>
     
     <!-- Topbar -->

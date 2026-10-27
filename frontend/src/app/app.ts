@@ -258,6 +258,11 @@ export class App implements OnInit {
   // ==========================================
   activePage = 'Executive Dashboard';
   mobileNavOpen = false;
+  sidebarCollapsed = false;
+
+  toggleSidebar(): void {
+    this.sidebarCollapsed = !this.sidebarCollapsed;
+  }
   searchTerm = '';
   bureauFilter = 'All Bureaus';
   statusFilter = 'All statuses';

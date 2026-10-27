@@ -47,6 +47,12 @@ button {
   display: flex;
   flex-direction: column;
   background-color: var(--gov-slate-50);
+  transition: margin-left 0.25s cubic-bezier(0.4, 0, 0.2, 1), width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+
+  &.collapsed {
+    margin-left: 72px;
+    width: calc(100% - 72px);
+  }
 }
 
 main {
@@ -72,6 +78,7 @@ main {
   z-index: 30;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 4px 0 20px rgba(7, 21, 36, 0.15);
+  transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .brand {
@@ -139,6 +146,146 @@ main {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Minimize & Collapse Controls */
+.sidebar-collapse-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #cbd5e1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 11px;
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+
+  .collapse-icon {
+    display: inline-block;
+    line-height: 1;
+  }
+}
+
+
+/* Collapsed Sidebar State */
+.sidebar.collapsed {
+  width: 72px;
+
+  .brand {
+    padding: 16px 14px;
+    justify-content: center;
+    gap: 0;
+
+    .brand-text {
+      display: none;
+    }
+
+    .sidebar-collapse-btn {
+      position: absolute;
+      right: -13px;
+      top: 25px;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: #071524;
+      border: 1.5px solid rgba(255, 255, 255, 0.3);
+      color: #f59e0b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
+      font-size: 10px;
+      z-index: 40;
+
+      &:hover {
+        background: #0f2742;
+        color: #ffffff;
+        transform: scale(1.12);
+      }
+    }
+  }
+
+  .perspective-switcher {
+    display: none;
+  }
+
+  .nav-caption {
+    display: none;
+  }
+
+  nav {
+    padding: 12px 10px;
+    align-items: center;
+
+    button {
+      width: 48px;
+      height: 44px;
+      padding: 0;
+      justify-content: center;
+      border-radius: 10px;
+      position: relative;
+
+      span:not(.nav-glyph):not(.nav-count) {
+        display: none;
+      }
+
+      .nav-glyph {
+        font-size: 19px;
+        margin: 0;
+      }
+
+      .nav-count {
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        padding: 2px 4px;
+        font-size: 8.5px;
+        min-width: 15px;
+        height: 15px;
+        line-height: 11px;
+      }
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.12);
+        transform: none;
+      }
+    }
+  }
+
+  .user-panel {
+    padding: 14px 8px;
+    justify-content: center;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+
+    > div:not(.avatar) {
+      display: none;
+    }
+
+    .avatar {
+      width: 38px;
+      height: 38px;
+      font-size: 13px;
+    }
+
+    .text-button {
+      font-size: 10px;
+      padding: 2px 4px;
+      white-space: nowrap;
+    }
+  }
 }
 
 .nav-caption {
@@ -1959,17 +2106,34 @@ footer {
   .portal-cards-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-  .sidebar {
+  .sidebar, .sidebar.collapsed {
     transform: translateX(-100%);
     transition: transform var(--transition-base);
     width: 270px;
   }
-  .sidebar.open {
+  .sidebar.open, .sidebar.collapsed.open {
     transform: translateX(0);
+    width: 270px;
+
+    .brand .brand-text {
+      display: flex;
+    }
+    .nav-caption {
+      display: block;
+    }
+    nav button span:not(.nav-glyph):not(.nav-count) {
+      display: inline;
+    }
+    .user-panel > div:not(.avatar) {
+      display: block;
+    }
   }
-  .main-shell {
+  .main-shell, .main-shell.collapsed {
     margin-left: 0;
     width: 100%;
+  }
+  .sidebar-collapse-btn {
+    display: none;
   }
   .scrim {
     display: block;
