@@ -73,7 +73,7 @@ async def security_and_audit_middleware(request: Request, call_next):
         role = user.get("role", "viewer")
         method = request.method.upper()
         admin_only = path.startswith("/api/admin/") or path.startswith("/api/auth/users")
-        write_roles = {"admin","bureau_head","officer","case_manager"}
+        write_roles = {"admin","bureau_head","officer","case_manager","institution"}
         if admin_only and role != "admin":
             return JSONResponse({"detail":"Administrator role required"}, status_code=403)
         if method in {"POST","PUT","PATCH","DELETE"} and role not in write_roles:
@@ -133,7 +133,7 @@ def create_auth_user(payload: dict, db: Session = Depends(get_db)):
     password = str(payload.get("password", ""))
     full_name = str(payload.get("full_name", "")).strip()
     role = str(payload.get("role", "viewer")).strip()
-    allowed_roles = {"admin", "bureau_head", "case_manager", "officer", "viewer"}
+    allowed_roles = {"admin", "bureau_head", "case_manager", "officer", "viewer", "institution"}
     if len(username) < 3 or len(password) < 12 or len(full_name) < 2:
         raise HTTPException(400, "Username/full name too short; password must be at least 12 characters")
     if role not in allowed_roles:

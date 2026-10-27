@@ -7,22 +7,135 @@ import { AuthService } from './auth.service';
 
 type CaseRecord = { id: string; institution: string; category: string; bureau: string; officer: string; status: string; due: string; priority: string; age: number };
 
+export interface LoginPortal {
+  id: 'aicte_official' | 'bureau_officer' | 'system_admin' | 'institution';
+  title: string;
+  shortTitle: string;
+  badge: string;
+  roleHint: string;
+  description: string;
+  glyph: string;
+  allowedRoles: string[];
+  placeholderUsername: string;
+  demoUsername: string;
+  demoPassword: string;
+  demoLabel: string;
+}
+
 @Component({ selector: 'app-root', standalone: true, imports: [CommonModule, FormsModule], templateUrl: './app.html', styleUrl: './app.scss' })
 export class App implements OnInit {
   constructor(private api: OneViewApiService, public auth: AuthService) {}
-  loginUsername = '';
-  loginPassword = '';
+
+  readonly loginPortals: LoginPortal[] = [
+    {
+      id: 'aicte_official',
+      title: 'AICTE Officials (Administration)',
+      shortTitle: 'AICTE Officials',
+      badge: 'Administration',
+      roleHint: 'Apex Administration & Bureau Heads',
+      description: 'Official access for AICTE leadership, directors, and bureau heads to monitor nationwide cases, cross-bureau intelligence, and policy escalations.',
+      glyph: '🏛️',
+      allowedRoles: ['admin', 'bureau_head'],
+      placeholderUsername: 'Official Email / Username (e.g. aicte.official)',
+      demoUsername: 'aicte.official',
+      demoPassword: '1234',
+      demoLabel: 'Prof. M. Sharma (AICTE Admin)'
+    },
+    {
+      id: 'bureau_officer',
+      title: 'Bureau Officers',
+      shortTitle: 'Bureau Officers',
+      badge: 'RB & PGRC Officers',
+      roleHint: 'Regulation & Grievance Bureaus',
+      description: 'Operational portal for assigned Regulation Bureau (RB) and Public Grievance Redressal Cell (PGRC) officers managing active complaints and investigations.',
+      glyph: '⚖️',
+      allowedRoles: ['officer', 'case_manager', 'bureau_head', 'admin'],
+      placeholderUsername: 'Officer Email / Username (e.g. officer.rb)',
+      demoUsername: 'officer.rb',
+      demoPassword: 'Officer1234!',
+      demoLabel: 'Demo Officer One (RB Officer)'
+    },
+    {
+      id: 'system_admin',
+      title: 'System Admin',
+      shortTitle: 'System Admin',
+      badge: 'IT & Security',
+      roleHint: 'System Security & Configuration',
+      description: 'Administrative access for technical administrators managing database configurations, audit logs, credential policies, and user accounts.',
+      glyph: '🛡️',
+      allowedRoles: ['admin'],
+      placeholderUsername: 'System Admin Username (e.g. admin)',
+      demoUsername: 'admin',
+      demoPassword: '1234',
+      demoLabel: 'System Administrator'
+    },
+    {
+      id: 'institution',
+      title: 'Institution',
+      shortTitle: 'Institution Portal',
+      badge: 'Colleges & Universities',
+      roleHint: 'Approved Institutions & Nodal Desks',
+      description: 'Institutional portal for technical colleges, polytechnics, and universities to track submitted complaints, compliance notices, and case updates.',
+      glyph: '🎓',
+      allowedRoles: ['institution', 'viewer', 'admin'],
+      placeholderUsername: 'Institution ID / Email (e.g. INST-DEMO-1001)',
+      demoUsername: 'INST-DEMO-1001',
+      demoPassword: '1234',
+      demoLabel: 'Demo Technical Institute'
+    }
+  ];
+
+  selectedPortalId: LoginPortal['id'] = 'aicte_official';
+
+  get currentPortal(): LoginPortal {
+    return this.loginPortals.find(p => p.id === this.selectedPortalId) || this.loginPortals[0];
+  }
+
+  selectPortal(portalId: LoginPortal['id']): void {
+    this.selectedPortalId = portalId;
+    this.loginError = '';
+    const p = this.currentPortal;
+    this.loginUsername = p.demoUsername;
+    this.loginPassword = p.demoPassword;
+  }
+
+  fillDemo(portal: LoginPortal): void {
+    this.selectedPortalId = portal.id;
+    this.loginUsername = portal.demoUsername;
+    this.loginPassword = portal.demoPassword;
+    this.loginError = '';
+  }
+
+  loginUsername = 'aicte.official';
+  loginPassword = '1234';
   loginBusy = false;
   loginError = '';
   get userDisplayName(): string { return this.auth.user?.full_name || this.auth.user?.username || 'Authorized user'; }
-  get roleLabel(): string { return (this.auth.user?.role || 'viewer').replaceAll('_', ' ').replace(/\\b\\w/g, c => c.toUpperCase()); }
-  get initials(): string { return this.userDisplayName.split(/\\s+/).filter(Boolean).slice(0,2).map(x => x[0].toUpperCase()).join('') || 'U'; }
+  get roleLabel(): string { return (this.auth.user?.role || 'viewer').replaceAll('_', ' ').replace(/\b\w/g, c => c.toUpperCase()); }
+  get initials(): string { return this.userDisplayName.split(/\s+/).filter(Boolean).slice(0,2).map(x => x[0].toUpperCase()).join('') || 'U'; }
   submitLogin(): void {
     this.loginError = '';
     if (!this.loginUsername.trim() || !this.loginPassword) { this.loginError = 'Enter your username and password.'; return; }
     this.loginBusy = true;
     this.auth.login(this.loginUsername.trim(), this.loginPassword).subscribe({
-      next: () => { this.loginPassword = ''; this.loginBusy = false; this.activePage = 'Command Center'; this.refreshData(); },
+      next: (res) => {
+        const userRole = res.user?.role;
+        const portal = this.currentPortal;
+        if (userRole !== 'admin' && !portal.allowedRoles.includes(userRole)) {
+          this.auth.logout();
+          this.loginBusy = false;
+          this.loginError = `This account has role "${userRole}". Please select the appropriate portal to sign in.`;
+          return;
+        }
+        this.loginPassword = '';
+        this.loginBusy = false;
+        if (userRole === 'institution') {
+          this.activePage = 'Institutions';
+        } else {
+          this.activePage = 'Command Center';
+        }
+        this.refreshData();
+      },
       error: err => { this.loginBusy = false; this.loginError = err?.error?.detail || 'Sign-in failed. Check your credentials and API connection.'; }
     });
   }

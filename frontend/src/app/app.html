@@ -1,16 +1,118 @@
 <section class="login-screen" *ngIf="!auth.isAuthenticated">
-  <div class="login-panel">
-    <div class="login-brand"><div class="login-mark">A</div><div><strong>AICTE OneView</strong><span>Institution case monitoring</span></div></div>
-    <div class="login-copy"><p class="login-eyebrow">OFFICIAL ACCESS</p><h1>Sign in to OneView</h1><p>Use your authorized AICTE account to access institutional complaints, cases and bureau workflows.</p></div>
-    <form class="login-form" (ngSubmit)="submitLogin()">
-      <label for="login-username">Username</label><input id="login-username" name="loginUsername" [(ngModel)]="loginUsername" autocomplete="username" required placeholder="Enter your username" />
-      <label for="login-password">Password</label><input id="login-password" name="loginPassword" [(ngModel)]="loginPassword" type="password" autocomplete="current-password" required placeholder="Enter your password" />
-      <p class="login-error" *ngIf="loginError" role="alert">{{loginError}}</p>
-      <button class="login-submit" type="submit" [disabled]="loginBusy">{{loginBusy ? 'Signing in…' : 'Sign in securely'}}</button>
-    </form>
-    <p class="login-footnote">Access is logged. Do not share your credentials. Contact your system administrator if you need an account.</p>
+  <div class="login-container">
+    
+    <!-- Top Branding & Gov Header -->
+    <header class="login-masthead">
+      <div class="login-brand-bar">
+        <div class="login-emblem-wrap">
+          <div class="login-mark">A</div>
+        </div>
+        <div class="login-brand-info">
+          <div class="login-gov-tag">Government of India · Ministry of Education</div>
+          <strong class="login-portal-name">Ek-Drishti · AICTE OneView</strong>
+          <span class="login-portal-desc">Unified Institution Case & Grievance Governance Platform</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 4 Login Options Navigation Cards -->
+    <div class="portal-selector-section">
+      <div class="portal-selector-label">
+        <span>SELECT ACCESS ROLE / PORTAL</span>
+        <small>Choose your portal category to authenticate with appropriate privileges</small>
+      </div>
+      <div class="portal-cards-grid">
+        <button 
+          type="button"
+          *ngFor="let portal of loginPortals; let idx = index" 
+          class="portal-card" 
+          [class.active]="selectedPortalId === portal.id"
+          (click)="selectPortal(portal.id)"
+          [attr.aria-pressed]="selectedPortalId === portal.id"
+        >
+          <div class="portal-card-top">
+            <span class="portal-glyph">{{ portal.glyph }}</span>
+            <span class="portal-badge">{{ portal.badge }}</span>
+          </div>
+          <div class="portal-card-title">{{ idx + 1 }}. {{ portal.title }}</div>
+          <div class="portal-card-hint">{{ portal.roleHint }}</div>
+          <div class="portal-card-indicator" *ngIf="selectedPortalId === portal.id">
+            <span>Active Portal</span>
+          </div>
+        </button>
+      </div>
+    </div>
+
+    <!-- Active Portal Sign-In Card -->
+    <div class="login-panel">
+      <div class="login-panel-header">
+        <div class="active-portal-badge">
+          <span class="badge-icon">{{ currentPortal.glyph }}</span>
+          <span>{{ currentPortal.title }}</span>
+        </div>
+        <h2>Sign in to {{ currentPortal.shortTitle }}</h2>
+        <p class="portal-desc">{{ currentPortal.description }}</p>
+      </div>
+
+      <!-- Quick Demo Auto-Fill Banner -->
+      <div class="demo-credential-banner">
+        <div class="demo-info">
+          <div class="demo-tag-row">
+            <span class="demo-tag">DEMO CREDENTIALS</span>
+            <span class="demo-user-name">{{ currentPortal.demoLabel }}</span>
+          </div>
+          <code>User: <strong>{{ currentPortal.demoUsername }}</strong> · Password: <strong>{{ currentPortal.demoPassword }}</strong></code>
+        </div>
+        <button type="button" class="demo-fill-btn" (click)="fillDemo(currentPortal)">
+          Apply Demo Credentials
+        </button>
+      </div>
+
+      <form class="login-form" (ngSubmit)="submitLogin()">
+        <label for="login-username">
+          <span>Username / Email</span>
+          <small>{{ currentPortal.roleHint }}</small>
+        </label>
+        <input 
+          id="login-username" 
+          name="loginUsername" 
+          [(ngModel)]="loginUsername" 
+          autocomplete="username" 
+          required 
+          [placeholder]="currentPortal.placeholderUsername" 
+        />
+
+        <label for="login-password">
+          <span>Password</span>
+          <small>PBKDF2 Encrypted</small>
+        </label>
+        <input 
+          id="login-password" 
+          name="loginPassword" 
+          [(ngModel)]="loginPassword" 
+          type="password" 
+          autocomplete="current-password" 
+          required 
+          placeholder="Enter your security password" 
+        />
+
+        <p class="login-error" *ngIf="loginError" role="alert">{{ loginError }}</p>
+
+        <button class="login-submit" type="submit" [disabled]="loginBusy">
+          <span *ngIf="!loginBusy">Sign In to {{ currentPortal.shortTitle }} →</span>
+          <span *ngIf="loginBusy">Authenticating securely…</span>
+        </button>
+      </form>
+
+      <div class="login-footnote-box">
+        <div class="security-dot"></div>
+        <p>Official access is monitored & audited under AICTE Cyber Security Directives. Session tokens automatically expire after inactivity.</p>
+      </div>
+    </div>
+
   </div>
 </section>
+
 <div class="app-shell" *ngIf="auth.isAuthenticated">
   <button class="scrim" *ngIf="mobileNavOpen" aria-label="Close navigation" (click)="mobileNavOpen = false"></button>
   <aside class="sidebar" [class.open]="mobileNavOpen">
