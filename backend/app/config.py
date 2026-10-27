@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = ""
-    cors_origins: str = "http://localhost:4200"
+    cors_origins: str = "http://localhost:4200,http://127.0.0.1:4200,http://localhost:4000,http://127.0.0.1:4000"
     app_env: str = "development"
     jwt_secret: str = "CHANGE_THIS_SECRET_BEFORE_PRODUCTION"
     access_token_minutes: int = 30

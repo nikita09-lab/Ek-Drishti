@@ -10,7 +10,10 @@ from app.config import settings
 from app.database import Base, engine, get_db
 from app import models, schemas
 from app.ids import new_id
-from app.security import hash_password, verify_password, create_access_token, decode_token
+from app.security import hash_password, verify_password, create_access_token, decode_token, extract_bearer_token
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.openapi.utils import get_openapi
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,14 +44,62 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$" if settings.app_env.lower() != "production" else None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+security = HTTPBearer(auto_error=False)
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title="AICTE OneView API",
+        version="0.1.0",
+        description=(
+            "Institution complaint and case monitoring API. Bureau recommendations are advisory only.\n\n"
+            "### How to Authenticate & Save Bearer Token in Swagger UI (/docs):\n"
+            "1. Run `/api/auth/login` (or one of the dedicated portal login endpoints) with your credentials.\n"
+            "2. Copy the `access_token` string from the JSON response.\n"
+            "3. Click the green **Authorize 🔓** button at the top-right of this page.\n"
+            "4. Paste your token (with or without 'Bearer ' prefix) and click **Authorize**.\n"
+            "5. Swagger UI will save this Bearer token in memory and automatically include it with all subsequent API requests!"
+        ),
+        routes=app.routes,
+    )
+    components = openapi_schema.setdefault("components", {})
+    components["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "Enter your JWT token obtained from /api/auth/login. Swagger UI will automatically attach 'Authorization: Bearer <token>' to all requests."
+        }
+    }
+    # Attach BearerAuth globally so Swagger UI saves and applies it to all requests
+    openapi_schema["security"] = [{"BearerAuth": []}]
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+
 @app.middleware("http")
 async def security_and_audit_middleware(request: Request, call_next):
+    # Allow CORS preflight requests to proceed immediately to CORSMiddleware
+    if request.method.upper() == "OPTIONS":
+        return await call_next(request)
+
     path = request.url.path
+
+    # Support endpoints requested with or without /api/ prefix (e.g. /dashboard/summary -> /api/dashboard/summary)
+    if not path.startswith("/api/") and path not in {"/", "/docs", "/openapi.json", "/redoc"}:
+        api_equivalent = f"/api{path}"
+        if any(getattr(r, "path", None) == api_equivalent for r in request.app.routes):
+            request.scope["path"] = api_equivalent
+            path = api_equivalent
+
     user = None
     # Fail closed for API access in every environment. Health, portal metadata, and login endpoints are public.
     is_public = (
@@ -57,32 +108,48 @@ async def security_and_audit_middleware(request: Request, call_next):
         or path.startswith("/api/auth/login")
     )
     if path.startswith("/api/") and not is_public:
+
         from starlette.responses import JSONResponse
-        auth = request.headers.get("authorization", "")
-        if not auth.lower().startswith("bearer "):
-            return JSONResponse({"detail":"Authentication required"}, status_code=401)
+        raw_auth = request.headers.get("authorization")
+        query_token = request.query_params.get("token")
+        token = extract_bearer_token(raw_auth, query_token)
+        if not token:
+            return JSONResponse(
+                {
+                    "detail": "Authentication required. Please click the green 'Authorize' button in /docs or provide an 'Authorization: Bearer <token>' header."
+                },
+                status_code=401
+            )
         try:
-            claims = decode_token(auth.split(" ",1)[1])
+            claims = decode_token(token)
         except HTTPException as exc:
-            return JSONResponse({"detail":exc.detail}, status_code=exc.status_code)
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
         # Re-check current user state and role so deactivation/role changes take effect immediately.
         try:
             from app.database import SessionLocal
             with SessionLocal() as auth_db:
                 auth_user = auth_db.scalar(select(models.AuthUser).where(models.AuthUser.id == claims.get("sub")))
                 if not auth_user or not auth_user.active:
-                    return JSONResponse({"detail":"Account is inactive or no longer exists"}, status_code=401)
-                user = {"sub":auth_user.id, "username":auth_user.username, "role":auth_user.role}
+                    return JSONResponse({"detail": "Account is inactive or no longer exists"}, status_code=401)
+                user = {
+                    "sub": auth_user.id,
+                    "username": auth_user.username,
+                    "full_name": auth_user.full_name,
+                    "role": auth_user.role
+                }
+                # Attach to request state for downstream handlers
+                request.state.user = user
+                request.state.auth_user = auth_user
         except Exception:
-            return JSONResponse({"detail":"Authentication service unavailable"}, status_code=503)
+            return JSONResponse({"detail": "Authentication service unavailable"}, status_code=503)
         role = user.get("role", "viewer")
         method = request.method.upper()
         admin_only = path.startswith("/api/admin/") or path.startswith("/api/auth/users")
-        write_roles = {"admin","bureau_head","officer","case_manager","institution"}
+        write_roles = {"admin", "bureau_head", "officer", "case_manager", "institution"}
         if admin_only and role != "admin":
-            return JSONResponse({"detail":"Administrator role required"}, status_code=403)
-        if method in {"POST","PUT","PATCH","DELETE"} and role not in write_roles:
-            return JSONResponse({"detail":"Your role does not permit this action"}, status_code=403)
+            return JSONResponse({"detail": "Administrator role required"}, status_code=403)
+        if method in {"POST", "PUT", "PATCH", "DELETE"} and role not in write_roles:
+            return JSONResponse({"detail": "Your role does not permit this action"}, status_code=403)
     response = await call_next(request)
     # Audit writes and auth events. Never record passwords, request bodies, or bearer tokens.
     if path.startswith("/api/") and (
@@ -102,7 +169,7 @@ async def security_and_audit_middleware(request: Request, call_next):
             pass
     return response
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 def root():
     return {
         "name": "AICTE OneView API",
@@ -111,7 +178,7 @@ def root():
         "portals": "/api/auth/portals",
     }
 
-@app.get("/api/health")
+@app.get("/api/health", tags=["System"])
 def health():
     return {"status": "ok", "timestamp": datetime.now().astimezone().isoformat()}
 
@@ -231,7 +298,7 @@ def perform_login(username: str, password: str, requested_portal: str | None, db
         }
     }
 
-@app.get("/api/auth/portals", response_model=list[schemas.PortalOut])
+@app.get("/api/auth/portals", response_model=list[schemas.PortalOut], tags=["Authentication"])
 def get_auth_portals():
     """Discover available login portals and their authorization requirements."""
     return [
@@ -246,49 +313,90 @@ def get_auth_portals():
         for k, v in PORTAL_CONFIG.items()
     ]
 
-@app.post("/api/auth/login", response_model=schemas.LoginResponse)
+@app.post("/api/auth/login", response_model=schemas.LoginResponse, tags=["Authentication"])
 def login(payload: schemas.LoginRequest, portal: str | None = None, db: Session = Depends(get_db)):
     """Universal login endpoint supporting optional portal validation."""
     target_portal = payload.portal or portal
     return perform_login(payload.username, payload.password, target_portal, db, "/api/auth/login")
 
 # Dedicated Endpoint 1: AICTE Officials (Administration)
-@app.post("/api/auth/login/aicte-official", response_model=schemas.LoginResponse)
-@app.post("/api/auth/login/official", response_model=schemas.LoginResponse)
+@app.post("/api/auth/login/aicte-official", response_model=schemas.LoginResponse, tags=["Authentication"])
+@app.post("/api/auth/login/official", response_model=schemas.LoginResponse, include_in_schema=False)
 def login_aicte_official(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
     """Dedicated login for AICTE Officials (Administration)."""
     return perform_login(payload.username, payload.password, "aicte_official", db, "/api/auth/login/aicte-official")
 
 # Dedicated Endpoint 2: Bureau Officers
-@app.post("/api/auth/login/bureau-officer", response_model=schemas.LoginResponse)
-@app.post("/api/auth/login/officer", response_model=schemas.LoginResponse)
+@app.post("/api/auth/login/bureau-officer", response_model=schemas.LoginResponse, tags=["Authentication"])
+@app.post("/api/auth/login/officer", response_model=schemas.LoginResponse, include_in_schema=False)
 def login_bureau_officer(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
     """Dedicated login for Bureau Officers (Regulation Bureau & PGRC)."""
     return perform_login(payload.username, payload.password, "bureau_officer", db, "/api/auth/login/bureau-officer")
 
 # Dedicated Endpoint 3: System Admin
-@app.post("/api/auth/login/system-admin", response_model=schemas.LoginResponse)
-@app.post("/api/auth/login/admin", response_model=schemas.LoginResponse)
+@app.post("/api/auth/login/system-admin", response_model=schemas.LoginResponse, tags=["Authentication"])
+@app.post("/api/auth/login/admin", response_model=schemas.LoginResponse, include_in_schema=False)
 def login_system_admin(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
     """Dedicated login for System Administrators."""
     return perform_login(payload.username, payload.password, "system_admin", db, "/api/auth/login/system-admin")
 
 # Dedicated Endpoint 4: Institution
-@app.post("/api/auth/login/institution", response_model=schemas.LoginResponse)
+@app.post("/api/auth/login/institution", response_model=schemas.LoginResponse, tags=["Authentication"])
 def login_institution(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
     """Dedicated login for Approved Institutions (Colleges & Universities)."""
     return perform_login(payload.username, payload.password, "institution", db, "/api/auth/login/institution")
 
 
-@app.get("/api/auth/me")
-def auth_me(request: Request):
-    auth = request.headers.get("authorization", "")
-    if not auth.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Bearer token required")
-    user = decode_token(auth.split(" ",1)[1])
-    return {"id":user["sub"],"username":user["username"],"role":user["role"]}
+@app.get(
+    "/api/auth/me",
+    response_model=schemas.AuthUserInfo,
+    tags=["Authentication"],
+    summary="Get Current Authenticated User",
+    description=(
+        "Returns the active user profile for the current Bearer token. "
+        "In Swagger UI (/docs), click the green **Authorize 🔓** button at the top-right to save your Bearer token across all APIs."
+    )
+)
+def auth_me(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    token: str | None = Query(default=None, description="Optional: pass JWT token directly or use Swagger Authorize button"),
+    db: Session = Depends(get_db)
+):
+    """Retrieve details of the currently authenticated user."""
+    # 1. First preference: user verified and attached to request state by middleware
+    user_state = getattr(request.state, "user", None)
+    if user_state:
+        return schemas.AuthUserInfo(
+            id=user_state["sub"],
+            username=user_state["username"],
+            full_name=user_state.get("full_name") or user_state["username"],
+            role=user_state["role"]
+        )
 
-@app.post("/api/auth/users", status_code=201)
+    # 2. Direct token extraction fallback
+    raw = token or (credentials.credentials if credentials else None) or request.headers.get("authorization")
+    cleaned_token = extract_bearer_token(raw)
+    if not cleaned_token:
+        raise HTTPException(
+            status_code=401,
+            detail="Bearer token required. Please click the green 'Authorize' button in /docs or provide 'Authorization: Bearer <token>' header."
+        )
+
+    claims = decode_token(cleaned_token)
+    user = db.scalar(select(models.AuthUser).where(models.AuthUser.id == claims.get("sub")))
+    if not user or not user.active:
+        raise HTTPException(status_code=401, detail="Account is inactive or no longer exists")
+
+    return schemas.AuthUserInfo(
+        id=user.id,
+        username=user.username,
+        full_name=user.full_name or user.username,
+        role=user.role
+    )
+
+
+@app.post("/api/auth/users", status_code=201, tags=["Authentication"])
 def create_auth_user(payload: dict, db: Session = Depends(get_db)):
     username = str(payload.get("username", "")).strip()
     password = str(payload.get("password", ""))
@@ -306,14 +414,14 @@ def create_auth_user(payload: dict, db: Session = Depends(get_db)):
     db.add(item); db.commit(); db.refresh(item)
     return {"id":item.id,"username":item.username,"full_name":item.full_name,"role":item.role,"active":item.active}
 
-@app.get("/api/admin/audit-logs")
+@app.get("/api/admin/audit-logs", tags=["Administration & Audit"])
 def get_audit_logs(limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)):
     return [{"id":x.id,"actor_user_id":x.actor_user_id,"actor_username":x.actor_username,
              "action":x.action,"resource":x.resource,"status_code":x.status_code,
              "ip_address":x.ip_address,"created_at":x.created_at}
             for x in db.scalars(select(models.AuditLog).order_by(models.AuditLog.created_at.desc()).limit(limit)).all()]
 
-@app.get("/api/dashboard/summary")
+@app.get("/api/dashboard/summary", tags=["Dashboard & Reports"])
 def dashboard_summary(db: Session = Depends(get_db)):
     complaint_total = db.scalar(select(func.count()).select_from(models.Complaint)) or 0
     case_total = db.scalar(select(func.count()).select_from(models.Case)) or 0
@@ -334,7 +442,7 @@ def dashboard_summary(db: Session = Depends(get_db)):
         "officers": db.scalar(select(func.count()).select_from(models.Officer).where(models.Officer.active == True)) or 0,
     }
 
-@app.get("/api/institutions", response_model=list[schemas.InstitutionOut])
+@app.get("/api/institutions", response_model=list[schemas.InstitutionOut], tags=["Institutions"])
 def list_institutions(search: str | None = None, state: str | None = None, region: str | None = None,
                       skip: int = 0, limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)):
     stmt = select(models.Institution)
@@ -346,13 +454,13 @@ def list_institutions(search: str | None = None, state: str | None = None, regio
         stmt = stmt.where(models.Institution.region == region)
     return list(db.scalars(stmt.order_by(models.Institution.name).offset(skip).limit(limit)).all())
 
-@app.post("/api/institutions", response_model=schemas.InstitutionOut, status_code=201)
+@app.post("/api/institutions", response_model=schemas.InstitutionOut, status_code=201, tags=["Institutions"])
 def create_institution(payload: schemas.InstitutionCreate, db: Session = Depends(get_db)):
     item = models.Institution(id=new_id("INST"), **payload.model_dump())
     db.add(item); db.commit(); db.refresh(item)
     return item
 
-@app.get("/api/institutions/{institution_id}")
+@app.get("/api/institutions/{institution_id}", tags=["Institutions"])
 def get_institution(institution_id: str, db: Session = Depends(get_db)):
     item = db.get(models.Institution, institution_id)
     if not item:
@@ -361,7 +469,7 @@ def get_institution(institution_id: str, db: Session = Depends(get_db)):
     cases = db.scalars(select(models.Case).where(models.Case.institution_id == institution_id).order_by(models.Case.opened_at.desc())).all()
     return {"institution": schemas.InstitutionOut.model_validate(item), "complaints": [schemas.ComplaintOut.model_validate(x) for x in complaints], "cases": [schemas.CaseOut.model_validate(x) for x in cases]}
 
-@app.get("/api/complaints", response_model=list[schemas.ComplaintOut])
+@app.get("/api/complaints", response_model=list[schemas.ComplaintOut], tags=["Complaints"])
 def list_complaints(search: str | None = None, institution_id: str | None = None, status: str | None = None,
                     bureau: str | None = None, skip: int = 0, limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)):
     stmt = select(models.Complaint)
@@ -372,7 +480,7 @@ def list_complaints(search: str | None = None, institution_id: str | None = None
     if bureau: stmt = stmt.where(models.Complaint.assigned_bureau == bureau)
     return list(db.scalars(stmt.order_by(models.Complaint.received_at.desc()).offset(skip).limit(limit)).all())
 
-@app.post("/api/complaints", response_model=schemas.ComplaintOut, status_code=201)
+@app.post("/api/complaints", response_model=schemas.ComplaintOut, status_code=201, tags=["Complaints"])
 def create_complaint(payload: schemas.ComplaintCreate, db: Session = Depends(get_db)):
     if not db.get(models.Institution, payload.institution_id):
         raise HTTPException(404, "Institution not found")
@@ -380,13 +488,13 @@ def create_complaint(payload: schemas.ComplaintCreate, db: Session = Depends(get
     db.add(item); db.commit(); db.refresh(item)
     return item
 
-@app.get("/api/complaints/{complaint_id}", response_model=schemas.ComplaintOut)
+@app.get("/api/complaints/{complaint_id}", response_model=schemas.ComplaintOut, tags=["Complaints"])
 def get_complaint(complaint_id: str, db: Session = Depends(get_db)):
     item = db.get(models.Complaint, complaint_id)
     if not item: raise HTTPException(404, "Complaint not found")
     return item
 
-@app.get("/api/cases", response_model=list[schemas.CaseOut])
+@app.get("/api/cases", response_model=list[schemas.CaseOut], tags=["Cases"])
 def list_cases(search: str | None = None, institution_id: str | None = None, status: str | None = None,
                bureau: str | None = None, officer_id: str | None = None, skip: int = 0,
                limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)):
@@ -398,7 +506,7 @@ def list_cases(search: str | None = None, institution_id: str | None = None, sta
     if officer_id: stmt = stmt.where(models.Case.officer_id == officer_id)
     return list(db.scalars(stmt.order_by(models.Case.opened_at.desc()).offset(skip).limit(limit)).all())
 
-@app.post("/api/cases", response_model=schemas.CaseOut, status_code=201)
+@app.post("/api/cases", response_model=schemas.CaseOut, status_code=201, tags=["Cases"])
 def create_case(payload: schemas.CaseCreate, db: Session = Depends(get_db)):
     if not db.get(models.Institution, payload.institution_id):
         raise HTTPException(404, "Institution not found")
@@ -416,13 +524,13 @@ def create_case(payload: schemas.CaseCreate, db: Session = Depends(get_db)):
     db.commit(); db.refresh(item)
     return item
 
-@app.get("/api/cases/{case_id}", response_model=schemas.CaseOut)
+@app.get("/api/cases/{case_id}", response_model=schemas.CaseOut, tags=["Cases"])
 def get_case(case_id: str, db: Session = Depends(get_db)):
     item = db.get(models.Case, case_id)
     if not item: raise HTTPException(404, "Case not found")
     return item
 
-@app.get("/api/cases/{case_id}/timeline")
+@app.get("/api/cases/{case_id}/timeline", tags=["Cases"])
 def case_timeline(case_id: str, db: Session = Depends(get_db)):
     item = db.get(models.Case, case_id)
     if not item: raise HTTPException(404, "Case not found")
@@ -430,7 +538,7 @@ def case_timeline(case_id: str, db: Session = Depends(get_db)):
     return [{"id": a.id, "action_type": a.action_type, "previous_status": a.previous_status, "new_status": a.new_status,
              "remarks": a.remarks, "officer_name": a.officer_name, "created_at": a.created_at} for a in actions]
 
-@app.post("/api/cases/{case_id}/actions", status_code=201)
+@app.post("/api/cases/{case_id}/actions", status_code=201, tags=["Cases"])
 def add_case_action(case_id: str, payload: schemas.ActionCreate, db: Session = Depends(get_db)):
     item = db.get(models.Case, case_id)
     if not item: raise HTTPException(404, "Case not found")
@@ -442,7 +550,7 @@ def add_case_action(case_id: str, payload: schemas.ActionCreate, db: Session = D
     db.add(action); db.commit()
     return {"message": "Action recorded", "case_id": case_id, "status": item.status, "action_id": action.id}
 
-@app.get("/api/overlaps")
+@app.get("/api/overlaps", tags=["Overlap Intelligence"])
 def find_overlaps(threshold: float = Query(0.72, ge=0.1, le=1.0), db: Session = Depends(get_db)):
     complaints = db.scalars(select(models.Complaint).options(joinedload(models.Complaint.institution)).order_by(models.Complaint.received_at.desc()).limit(500)).all()
     saved_reviews = db.scalars(select(models.OverlapReviewRecord)).all()
@@ -466,7 +574,7 @@ def find_overlaps(threshold: float = Query(0.72, ge=0.1, le=1.0), db: Session = 
                                 "reviewed_at": review.reviewed_at.isoformat() if review else None})
     return matches[:200]
 
-@app.post("/api/overlaps/review", status_code=201)
+@app.post("/api/overlaps/review", status_code=201, tags=["Overlap Intelligence"])
 def review_overlap(payload: schemas.OverlapReview, db: Session = Depends(get_db)):
     first = db.get(models.Complaint, payload.complaint_id)
     second = db.get(models.Complaint, payload.related_complaint_id)
@@ -526,7 +634,7 @@ def review_overlap(payload: schemas.OverlapReview, db: Session = Depends(get_db)
             "related_complaint_id": second.id, "decision": payload.decision,
             "issue_group_id": review.issue_group_id, "reviewed_at": review.reviewed_at.isoformat()}
 
-@app.get("/api/issue-groups")
+@app.get("/api/issue-groups", tags=["Overlap Intelligence"])
 def list_issue_groups(db: Session = Depends(get_db)):
     groups = db.scalars(select(models.IssueGroup).order_by(models.IssueGroup.updated_at.desc())).all()
     result = []
@@ -545,7 +653,7 @@ def list_issue_groups(db: Session = Depends(get_db)):
                                       for membership, complaint in rows]})
     return result
 
-@app.post("/api/recommendations/bureau")
+@app.post("/api/recommendations/bureau", tags=["Overlap Intelligence"])
 def recommend_bureau(payload: dict):
     text = " ".join(str(payload.get(k, "")) for k in ("subject", "description", "category")).lower()
     pgrc_terms = ("grievance", "complaint", "harassment", "delay", "response", "public")
@@ -557,27 +665,27 @@ def recommend_bureau(payload: dict):
     return {"recommended_bureau": bureau, "reason": reason, "confidence": "low" if pgrc_score == rb_score else "heuristic",
             "advisory_only": True, "message": "An authorized official must review and decide the Bureau."}
 
-@app.get("/api/officers", response_model=list[schemas.OfficerOut])
+@app.get("/api/officers", response_model=list[schemas.OfficerOut], tags=["Officers"])
 def list_officers(bureau: str | None = None, active: bool | None = True, db: Session = Depends(get_db)):
     stmt = select(models.Officer)
     if bureau: stmt = stmt.where(models.Officer.bureau == bureau)
     if active is not None: stmt = stmt.where(models.Officer.active == active)
     return list(db.scalars(stmt.order_by(models.Officer.name)).all())
 
-@app.post("/api/officers", response_model=schemas.OfficerOut, status_code=201)
+@app.post("/api/officers", response_model=schemas.OfficerOut, status_code=201, tags=["Officers"])
 def create_officer(payload: schemas.OfficerCreate, db: Session = Depends(get_db)):
     item = models.Officer(id=new_id("OFF"), **payload.model_dump())
     db.add(item); db.commit(); db.refresh(item)
     return item
 
-@app.get("/api/notifications")
+@app.get("/api/notifications", tags=["Dashboard & Reports"])
 def list_notifications(unread_only: bool = False, limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)):
     stmt = select(models.Notification)
     if unread_only: stmt = stmt.where(models.Notification.read == False)
     rows = db.scalars(stmt.order_by(models.Notification.created_at.desc()).limit(limit)).all()
     return [{"id": n.id, "title": n.title, "message": n.message, "related_case_id": n.related_case_id, "read": n.read, "created_at": n.created_at} for n in rows]
 
-@app.get("/api/reports/summary")
+@app.get("/api/reports/summary", tags=["Dashboard & Reports"])
 def report_summary(db: Session = Depends(get_db)):
     bureau_rows = db.execute(select(models.Case.bureau, func.count()).group_by(models.Case.bureau)).all()
     status_rows = db.execute(select(models.Case.status, func.count()).group_by(models.Case.status)).all()

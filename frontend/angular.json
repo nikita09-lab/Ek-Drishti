@@ -40,6 +40,9 @@
         },
         "serve": {
           "builder": "@angular/build:dev-server",
+          "options": {
+            "proxyConfig": "proxy.conf.json"
+          },
           "configurations": {
             "production": {"buildTarget": "aicte-oneview-frontend:build:production"},
             "development": {"buildTarget": "aicte-oneview-frontend:build:development"}

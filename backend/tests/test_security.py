@@ -63,3 +63,31 @@ def test_viewer_cannot_write():
             assert denied.status_code == 403
         finally:
             _delete_user(username)
+
+def test_auth_me_endpoint():
+    username, password = "test_auth_me_user", "Test-Only-Password-9381!"
+    with TestClient(app) as client:
+        # Unauthenticated request should fail with 401
+        unauth = client.get("/api/auth/me")
+        assert unauth.status_code == 401
+
+        _create_user(username, password, "officer")
+        try:
+            login = client.post("/api/auth/login", json={"username": username, "password": password})
+            assert login.status_code == 200
+            token = login.json()["access_token"]
+
+            # Standard Bearer header
+            resp = client.get("/api/auth/me", headers={"Authorization": f"Bearer {token}"})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["username"] == username
+            assert data["role"] == "officer"
+
+            # Query param ?token=
+            resp_query = client.get(f"/api/auth/me?token={token}")
+            assert resp_query.status_code == 200
+            assert resp_query.json()["username"] == username
+        finally:
+            _delete_user(username)
+

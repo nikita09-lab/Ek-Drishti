@@ -249,10 +249,13 @@ export class App implements OnInit {
         this.ngZone.run(() => {
           this.apiConnected = false;
           this.loading = false;
-          this.loadError = err?.status === 0 ? 'Cannot reach the API. Start the FastAPI backend at http://127.0.0.1:8000.' : 'Could not load records from the API. Check the backend terminal for details.';
+          this.loadError = err?.status === 0 
+            ? 'Cannot reach the API. Start the FastAPI backend at http://127.0.0.1:8000.' 
+            : `Could not load records from API (${err?.status ?? 'Unknown error'}: ${err?.error?.detail || err?.statusText || 'Error'}). Check backend logs.`;
           this.cdr.detectChanges();
         });
       }
+
     });
   }
   private formatDate(value: string): string { return new Date(`${value}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }); }
