@@ -2,11 +2,39 @@ import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 
-export function getApiBaseUrl(): string {
-  if (typeof window !== 'undefined' && window.location && window.location.hostname) {
-    return `http://${window.location.hostname}:8000/api`;
+export const PRODUCTION_API_URL = 'https://ek-drishti.onrender.com/api';
+export const LOCAL_API_URL = 'http://127.0.0.1:8000/api';
+
+/**
+ * Normalizes an API base URL, ensuring no trailing slash and exactly one '/api' suffix.
+ */
+export function normalizeApiUrl(url: string): string {
+  let cleaned = (url || '').trim().replace(/\/+$/, '');
+  if (!cleaned) return PRODUCTION_API_URL;
+  if (!cleaned.endsWith('/api')) {
+    cleaned = `${cleaned}/api`;
   }
-  return 'http://127.0.0.1:8000/api';
+  return cleaned;
+}
+
+export function getApiBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    // 1. Runtime override via localStorage or window object
+    const custom = window.localStorage.getItem('API_BASE_URL') || (window as any).__API_BASE_URL__;
+    if (custom) {
+      return normalizeApiUrl(custom);
+    }
+    // 2. Local development environment detection
+    if (window.location && window.location.hostname) {
+      const host = window.location.hostname;
+      if (host === 'localhost' || host === '127.0.0.1') {
+        return LOCAL_API_URL;
+      }
+    }
+    // 3. Deployed production application (e.g. https://ek-drishti-1.onrender.com)
+    return PRODUCTION_API_URL;
+  }
+  return PRODUCTION_API_URL;
 }
 
 export const API_BASE_URL = getApiBaseUrl();
@@ -125,7 +153,7 @@ export interface InstitutionRecord {
   created_at: string;
 }
 
-export interface InstitutionProfile extends InstitutionRecord {}
+export interface InstitutionProfile extends InstitutionRecord { }
 
 export interface SystemHealth {
   status: string;
@@ -209,7 +237,7 @@ export class OneViewApiService {
     return getApiBaseUrl();
   }
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient) { }
 
   health(): Observable<{ status: string }> {
     return this.http.get<{ status: string }>(`${this.apiBase}/health`);

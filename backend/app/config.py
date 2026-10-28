@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str = ""
-    cors_origins: str = "http://localhost:4200,http://127.0.0.1:4200,http://localhost:4000,http://127.0.0.1:4000"
+    cors_origins: str = "http://localhost:4200,http://127.0.0.1:4200,http://localhost:4000,http://127.0.0.1:4000,https://ek-drishti-1.onrender.com"
     app_env: str = "development"
     jwt_secret: str = "CHANGE_THIS_SECRET_BEFORE_PRODUCTION"
     access_token_minutes: int = 30
@@ -19,6 +19,11 @@ class Settings(BaseSettings):
 
     @property
     def origins(self) -> list[str]:
-        return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+        origins_list: list[str] = []
+        for item in self.cors_origins.split(","):
+            cleaned = item.strip().rstrip("/")
+            if cleaned and cleaned not in origins_list:
+                origins_list.append(cleaned)
+        return origins_list
 
 settings = Settings()
