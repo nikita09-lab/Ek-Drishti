@@ -637,7 +637,9 @@ export class App implements OnInit {
           this.apiConnected = false;
           this.loading = false;
           this.loadError = err?.status === 0
-            ? 'Cannot reach the backend API. Please ensure the server is running on http://127.0.0.1:8000.'
+            ? (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+                ? 'Cannot reach the backend API. Please ensure the server is running on http://127.0.0.1:8000.'
+                : 'Cannot reach the backend API (https://ek-drishti.onrender.com). Please verify internet connection and backend status.')
             : `API communication issue (${err?.status ?? 'Error'}): ${err?.error?.detail || err?.statusText || 'Could not fetch records'}.`;
           this.cdr.detectChanges();
         });

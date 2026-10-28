@@ -70,7 +70,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins,
-    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|https://.*\.onrender\.com)$" if settings.app_env.lower() != "production" else None,
+    allow_origin_regex=r"^https://ek-drishti.*\.onrender\.com$" if settings.app_env.lower() == "production" else r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|https://.*\.onrender\.com)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1058,3 +1058,10 @@ def report_summary(db: Session = Depends(get_db)):
     return {"cases_by_bureau": [{"bureau": b or "Unassigned", "count": n} for b, n in bureau_rows],
             "cases_by_status": [{"status": s, "count": n} for s, n in status_rows],
             "institutions_by_region": [{"region": r or "Unspecified", "count": n} for r, n in region_rows]}
+
+if __name__ == "__main__":
+    import os
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=False)
+
